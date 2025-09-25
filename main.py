@@ -24,8 +24,13 @@ def main(input, out_dir):
     produced = False
     for source in inp:
         produced = True
-        result = transcriber.transcribe(source, out_dir=out_dir)
+
         name = Path(source).stem
+        if out.exists(name):
+            click.echo(f"skip: {out.path_for(name)}")
+            continue
+
+        result = transcriber.transcribe(source, out_dir=out_dir)
         saved = out.save(name, {"result": result})
         click.echo(saved)
 

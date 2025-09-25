@@ -13,9 +13,15 @@ class Output(Protocol):
 class LocalJsonOutput:
     root: Path
 
+    def path_for(self, name: str) -> Path:
+        return self.root / f"{name}.json"
+
+    def exists(self, name: str) -> bool:
+        return self.path_for(name).exists()
+
     def save(self, name: str, data: Mapping[str, Any]) -> str:
         self.root.mkdir(parents=True, exist_ok=True)
-        path = self.root / f"{name}.json"
+        path = self.path_for(name)
         path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
