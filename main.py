@@ -2,13 +2,13 @@ from pathlib import Path
 
 import click
 
-from voxmem.source import LocalSource
+from voxmem.input import LocalInput
 from voxmem.output import LocalJsonOutput
 from voxmem.transcription import NoopTranscriber
 
 
 @click.command()
-@click.argument("path", type=click.Path())
+@click.argument("input", type=click.Path())
 @click.option(
     "--out-dir",
     type=click.Path(file_okay=False, dir_okay=True, writable=True),
@@ -16,20 +16,21 @@ from voxmem.transcription import NoopTranscriber
     show_default=True,
     help="Directory to save transcription results",
 )
-def main(path, out_dir):
-    """Generate text transcriptions for audio files"""
-    source = LocalSource().resolve(path)
-    output = LocalJsonOutput(Path(out_dir))
-
+def main(input, out_dir):
+    inp = LocalInput(Path(input))
+    out = LocalJsonOutput(root=Path(out_dir))
     transcriber = NoopTranscriber()
 
-    result = transcriber.transcribe(source, out_dir=out_dir)
+    produced = False
+    for source in inp:
+        produced = True
+        result = transcriber.transcribe(source, out_dir=out_dir)
+        name = Path(source).stem
+        saved = out.save(name, {"result": result})
+        click.echo(saved)
 
-    name = Path(source).stem
-    saved = output.save(name, {"result": result})
-
-    click.echo(saved)
-    click.echo(result)
+    if not produced:
+        raise click.UsageError("No audio files found for the given input.")
 
 
 if __name__ == "__main__":
