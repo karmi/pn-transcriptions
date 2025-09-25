@@ -10,7 +10,7 @@ class Source(Protocol):
 
 @dataclass
 class LocalSource:
-    root: Path | None = None  # optional base dir to prepend
+    root: Path | None = None
 
     def resolve(self, path: str) -> str:
         p = Path(self.root, path) if self.root else Path(path)

@@ -1,6 +1,9 @@
+from pathlib import Path
+
 import click
 
-from voxmem.storage import LocalSource
+from voxmem.source import LocalSource
+from voxmem.output import LocalJsonOutput
 from voxmem.transcription import NoopTranscriber
 
 
@@ -16,8 +19,16 @@ from voxmem.transcription import NoopTranscriber
 def main(path, out_dir):
     """Generate text transcriptions for audio files"""
     source = LocalSource().resolve(path)
+    output = LocalJsonOutput(Path(out_dir))
+
     transcriber = NoopTranscriber()
+
     result = transcriber.transcribe(source, out_dir=out_dir)
+
+    name = Path(source).stem
+    saved = output.save(name, {"result": result})
+
+    click.echo(saved)
     click.echo(result)
 
 
