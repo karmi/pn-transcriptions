@@ -27,14 +27,19 @@ from voxmem.util import name_from_source
     show_default=True,
     help="Number of parallel workers for transcriptions",
 )
-def main(input, out_dir, workers):
+@click.option(
+    "--timeout",
+    "-t",
+    type=int,
+    default=3600,
+    show_default=True,
+    help="Wall-clock timeout (seconds) for each transcription",
+)
+def main(input, out_dir, workers, timeout):
     inp = LocalInput(Path(input))
 
     out = LocalJsonOutput(root=Path(out_dir))
     sources = list(inp)
-
-    if not sources:
-        raise click.UsageError("No audio files found for the given input.")
 
     to_run: list[str] = []
     skipped = 0
@@ -46,12 +51,15 @@ def main(input, out_dir, workers):
         else:
             to_run.append(src)
 
+    if not sources:
+        raise click.UsageError("No audio files found for the given input.")
+
     if not to_run:
         click.echo("All outputs exist; nothing to do.")
         return
 
     def _process(source: str) -> str:
-        transcriber = AssemblyAITranscriber()
+        transcriber = AssemblyAITranscriber(timeout=float(timeout))
         name = name_from_source(source)
         data = transcriber.transcribe(source)
         saved = out.save(name, data)
