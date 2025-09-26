@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import click
 from tqdm import tqdm
 
-from voxmem.input import LocalInput
+from voxmem.input import LocalInput, R2Input
 from voxmem.output import LocalJsonOutput
 from voxmem.transcription import AssemblyAITranscriber
 from voxmem.util import name_from_source
@@ -36,7 +36,10 @@ from voxmem.util import name_from_source
     help="Wall-clock timeout (seconds) for each transcription",
 )
 def main(input, out_dir, workers, timeout):
-    inp = LocalInput(Path(input))
+    if isinstance(input, str) and input.startswith("r2://"):
+        inp = R2Input.from_env(input)
+    else:
+        inp = LocalInput(Path(input))
 
     out = LocalJsonOutput(root=Path(out_dir))
     sources = list(inp)
