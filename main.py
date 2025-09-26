@@ -6,7 +6,8 @@ from tqdm import tqdm
 
 from voxmem.input import LocalInput
 from voxmem.output import LocalJsonOutput
-from voxmem.transcription import NoopTranscriber
+from voxmem.transcription import AssemblyAITranscriber
+from voxmem.util import name_from_source
 
 
 @click.command()
@@ -38,7 +39,7 @@ def main(input, out_dir, workers):
     to_run: list[str] = []
     skipped = 0
     for src in sources:
-        name = Path(src).stem
+        name = name_from_source(src)
         if out.exists(name):
             skipped += 1
             tqdm.write(f"skip: {out.path_for(name)}")
@@ -50,10 +51,10 @@ def main(input, out_dir, workers):
         return
 
     def _process(source: str) -> str:
-        transcriber = NoopTranscriber()
-        name = Path(source).stem
-        result = transcriber.transcribe(source, out_dir=out_dir)
-        saved = out.save(name, {"result": result})
+        transcriber = AssemblyAITranscriber()
+        name = name_from_source(source)
+        data = transcriber.transcribe(source)
+        saved = out.save(name, data)
         return saved
 
     done = 0
