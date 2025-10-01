@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numbers
 import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Protocol
@@ -78,3 +79,82 @@ class AssemblyAITranscriber:
                 raise RuntimeError(err)
 
             time.sleep(aai.settings.polling_interval)
+
+
+@dataclass
+class MLXWhisperTranscriber:
+    model_id: str = "mlx-community/whisper-large-v3-mlx"
+    language: str | None = None
+    verbose: bool = False
+
+    def transcribe(self, source: str) -> Mapping[str, Any]:
+        try:
+            import mlx_whisper
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise RuntimeError(
+                "mlx-whisper is required for the MLX backend; install it via 'pip install mlx-whisper'."
+            ) from exc
+
+        kwargs: dict[str, Any] = {
+            "path_or_hf_repo": self.model_id,
+            "word_timestamps": True,
+        }
+
+        if self.language:
+            kwargs["language"] = self.language
+        if self.verbose is not None:
+            kwargs["verbose"] = self.verbose
+
+        result = mlx_whisper.transcribe(source, **kwargs)
+
+        segments = result.get("segments") or []
+        words: list[dict[str, Any]] = []
+        audio_duration: float | None = None
+
+        for segment in segments:
+            seg_words = segment.get("words") or []
+            for word in seg_words:
+                cleaned = {
+                    key: self._to_builtin(value)
+                    for key, value in word.items()
+                }
+                words.append(cleaned)
+
+                end = cleaned.get("end")
+                if isinstance(end, (int, float)):
+                    audio_duration = (
+                        max(audio_duration or 0.0, float(end))
+                        if audio_duration is not None
+                        else float(end)
+                    )
+
+            if not seg_words:
+                end = self._to_builtin(segment.get("end"))
+                if isinstance(end, (int, float)):
+                    audio_duration = (
+                        max(audio_duration or 0.0, float(end))
+                        if audio_duration is not None
+                        else float(end)
+                    )
+
+        return {
+            "id": None,
+            "status": "completed",
+            "error": None,
+            "confidence": None,
+            "audio_duration": audio_duration,
+            "text": result.get("text"),
+            "words": words,
+        }
+
+    @staticmethod
+    def _to_builtin(value: Any) -> Any:
+        if isinstance(value, numbers.Number):
+            return float(value)
+        if isinstance(value, (list, tuple)):
+            return [MLXWhisperTranscriber._to_builtin(v) for v in value]
+        if isinstance(value, dict):
+            return {
+                k: MLXWhisperTranscriber._to_builtin(v) for k, v in value.items()
+            }
+        return value

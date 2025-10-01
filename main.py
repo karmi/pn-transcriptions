@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from voxmem.input import LocalInput, R2Input
 from voxmem.output import LocalJsonOutput
-from voxmem.transcription import AssemblyAITranscriber
+from voxmem.transcription import AssemblyAITranscriber, MLXWhisperTranscriber
 from voxmem.util import name_from_source
 
 
@@ -35,7 +35,14 @@ from voxmem.util import name_from_source
     show_default=True,
     help="Wall-clock timeout (seconds) for each transcription",
 )
-def main(input, out_dir, workers, timeout):
+@click.option(
+    "--backend",
+    type=click.Choice(["assemblyai", "mlx-whisper"]),
+    default="assemblyai",
+    show_default=True,
+    help="Transcription backend to use",
+)
+def main(input, out_dir, workers, timeout, backend):
     if isinstance(input, str) and input.startswith("r2://"):
         inp = R2Input.from_env(input)
     else:
@@ -62,7 +69,10 @@ def main(input, out_dir, workers, timeout):
         return
 
     def _process(source: str) -> str:
-        transcriber = AssemblyAITranscriber(timeout=float(timeout))
+        if backend == "assemblyai":
+            transcriber = AssemblyAITranscriber(timeout=float(timeout))
+        else:
+            transcriber = MLXWhisperTranscriber()
         name = name_from_source(source)
         data = transcriber.transcribe(source)
         saved = out.save(name, data)
