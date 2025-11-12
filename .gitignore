@@ -3,5 +3,9 @@ uv.lock
 __pycache__
 *.egg-info
 
+*.env*
+
 tmp/
 transcripts/
+output/
+runs/

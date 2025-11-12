@@ -1,14 +1,13 @@
 # Transcriptions
 
-Transcribe audio files to text. Currently supports files stored locally or in the Cloudflare R2 storage, and uses the [AssemblyAI](https://www.assemblyai.com/) service for transcriptions.
+A simple transcription pipeline powered by [AssemblyAI](https://www.assemblyai.com/).
+
+The command-line application reads a CSV file containing `filename` and `url` columns, submits every audio URL to AssemblyAI, persists the full JSON response for each row, and stores the returned transcription ID back into the source CSV.
 
 ## Installation
 
-Requires Python 3.13+, [`uv`](https://docs.astral.sh/uv/) for managing dependencies and an AssemblyAI account (freemium available).
-
-Create a virtual environment and install the package:
-
 ```bash
+uv sync
 uv venv
 source .venv/bin/activate
 uv pip install -e .
@@ -16,17 +15,42 @@ uv pip install -e .
 
 ## Configuration
 
-Export the following environment variables:
+Add your AssemblyAI token to the environment:
 
-- `ASSEMBLYAI_API_KEY` — AssemblyAI access token
-- `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` — Cloudflare R2 keys for remote inputs
-
-## Running Locally
-
-The CLI consumes a single audio file, a directory tree, or an `r2://bucket/prefix` URL and writes JSON transcripts to the target directory (default `transcripts/`). Existing outputs are skipped automatically.
-
-```bash
-uv run python main.py <input>
+```
+ASSEMBLYAI_API_KEY=sk-...
 ```
 
-Use `uv run main.py --help` for the list of options.
+The CLI automatically loads `.env` files via `python-dotenv`.
+
+## CSV format
+
+The input CSV must contain two columns:
+
+```csv
+filename,url
+01_audio.mp3,https://example.com/01_audio.mp3
+```
+
+During execution the tool adds/updates the following columns atomically:
+
+- `transcription_id` – AssemblyAI transcript ID
+- `status` – `completed` or `error`
+- `error` – most recent error message (if any)
+
+Duplicate filenames (within the selected `offset`/`limit` window) cause the run to abort to avoid clobbering outputs.
+
+## Usage
+
+Run the Typer-based CLI with `uv` (recommended):
+
+```bash
+uv run python main.py tmp/samples/samples.csv \
+  --output output/runs/batch-001 \
+  --workers 8 \
+  --offset 0 \
+  --limit 250 \
+  --logfile output/runs/batch-001/transcriptions.log
+```
+
+Use `uv run python main.py --help` for the complete list of options.
