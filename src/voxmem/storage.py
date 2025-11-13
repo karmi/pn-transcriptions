@@ -19,7 +19,7 @@ class StorageResult:
 
 
 class TranscriptStorage:
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, file_mode: int = 0o644) -> None:
         self.root = root
         self.root.mkdir(parents=True, exist_ok=True)
 
@@ -36,7 +36,9 @@ class TranscriptStorage:
         json_path = self._write_json(folder / f"{transcription_id}.json", payload)
         vtt_path = self._write_text(folder / f"{transcription_id}.vtt", vtt)
         srt_path = self._write_text(folder / f"{transcription_id}.srt", srt)
-        return StorageResult(folder=folder, json_path=json_path, vtt_path=vtt_path, srt_path=srt_path)
+        return StorageResult(
+            folder=folder, json_path=json_path, vtt_path=vtt_path, srt_path=srt_path
+        )
 
     def _ensure_folder(self, filename: str) -> Path:
         safe = normalize_to_dirname(filename)
@@ -61,6 +63,7 @@ class TranscriptStorage:
         try:
             with os.fdopen(tmp_fd, "w", encoding="utf-8") as fh:
                 fh.write(data)
+            os.chmod(tmp_path, self.file_mode)
             os.replace(tmp_path, target)
         finally:
             if os.path.exists(tmp_path):
