@@ -45,7 +45,7 @@ Duplicate filenames (within the selected `offset`/`limit` window) cause the run 
 Run the Typer-based CLI with `uv` (recommended):
 
 ```bash
-uv run python main.py tmp/samples/samples.csv \
+uv run python main.py transcribe tmp/samples/samples.csv \
   --output output/runs/batch-001 \
   --workers 8 \
   --offset 0 \
@@ -54,3 +54,9 @@ uv run python main.py tmp/samples/samples.csv \
 ```
 
 Use `uv run python main.py --help` for the complete list of options.
+
+To only validate the CSV slice for duplicate filenames without transcribing, run:
+
+```bash
+uv run python main.py check tmp/samples/samples.csv
+```

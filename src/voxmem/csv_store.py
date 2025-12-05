@@ -87,8 +87,9 @@ class CsvStore:
         return [CsvRow(index=i, data=self.rows[i]) for i in range(start, end)]
 
     def ensure_unique_filenames(self, rows: Sequence[CsvRow]) -> None:
-        seen: set[str] = set()
-        duplicates: set[str] = set()
+        seen: dict[str, tuple[int, str]] = {}
+        duplicates: dict[str, list[tuple[int, str]]] = {}
+
         for row in rows:
             name = row.filename
             try:
@@ -97,14 +98,17 @@ class CsvStore:
                 raise ValueError(f"Row {row.index}: {exc}") from exc
             key = norm.lower()
             if key in seen:
-                duplicates.add(name or norm)
+                # include the first occurrence once, then all subsequent ones
+                duplicates.setdefault(key, [seen[key]]).append((row.index, name or norm))
             else:
-                seen.add(key)
+                seen[key] = (row.index, name or norm)
 
         if duplicates:
-            raise ValueError(
-                "Duplicate filenames detected: " + ", ".join(sorted(duplicates))
-            )
+            lines: list[str] = []
+            for entries in duplicates.values():
+                for idx, value in entries:
+                    lines.append(f"Row {idx}: {value}")
+            raise ValueError("Duplicate filenames detected:\n" + "\n".join(lines))
 
     def pending(self, rows: Sequence[CsvRow]) -> list[CsvRow]:
         return [row for row in rows if not row.is_completed()]

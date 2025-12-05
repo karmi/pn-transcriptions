@@ -166,7 +166,43 @@ def _extract_audio_duration(payload: Mapping[str, Any]) -> float | None:
 
 
 @app.command()
-def run(
+def check(
+    csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, writable=True),
+    offset: int = typer.Option(
+        0, "--offset", min=0, help="Start processing from this row (0-based)"
+    ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        min=1,
+        help="Maximum number of rows to process (defaults to the rest of the file)",
+    ),
+):
+    """Only check for duplicate filenames in the selected CSV slice."""
+    load_dotenv()
+    store = CsvStore(csv_path)
+    selected = store.slice(offset=offset, limit=limit)
+    if not selected:
+        console.print("[yellow]No rows matched the requested offset/limit.[/yellow]")
+        raise typer.Exit(code=0)
+
+    try:
+        store.ensure_unique_filenames(selected)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        console.print(
+            f"[yellow]Checked {len(selected)} row(s); duplicates detected.[/yellow]"
+        )
+        raise typer.Exit(code=1)
+
+    console.print(
+        f"[green]Checked {len(selected)} row(s); no duplicates found.[/green]"
+    )
+    raise typer.Exit(code=0)
+
+
+@app.command()
+def transcribe(
     csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, writable=True),
     output: Path = typer.Option(
         Path("transcripts"),
