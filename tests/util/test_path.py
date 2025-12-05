@@ -17,6 +17,14 @@ def test_unicode_and_spaces() -> None:
     assert normalize_to_dirname("Žluťoučký kůň.mp3") == "Zlutoucky_kun"
 
 
+def test_cyrillic_is_transliterated() -> None:
+    assert normalize_to_dirname("тест.mp3") == "test"
+
+
+def test_cyrillic_with_suffix_retains_words() -> None:
+    assert normalize_to_dirname("леся_аудіо foo bar.mp3") == "lesia_audio_foo_bar"
+
+
 def test_symbols_are_replaced() -> None:
     assert normalize_to_dirname("foo*?bar.mp3") == "foo_bar"
 

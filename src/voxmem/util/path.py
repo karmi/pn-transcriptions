@@ -4,6 +4,8 @@ import re
 import unicodedata
 from pathlib import Path
 
+from unidecode import unidecode
+
 
 _SAFE_PATTERN = re.compile(r"[^A-Za-z0-9._-]+")
 
@@ -16,15 +18,17 @@ def normalize_to_dirname(name: str, max_length: int = 100) -> str:
     if not filename:
         raise ValueError("Filename must contain at least one visible character")
 
-    stem = Path(filename).stem.strip()
-    candidate = stem or filename
+    base = Path(filename).stem.strip() or filename
 
-    candidate = unicodedata.normalize("NFKD", candidate)
-    candidate = candidate.encode("ascii", "ignore").decode("ascii")
-    candidate = candidate.replace(" ", "_")
-    candidate = _SAFE_PATTERN.sub("_", candidate)
-    candidate = candidate.strip("._-")
+    def _clean(value: str) -> str:
+        text = unicodedata.normalize("NFKD", value)
+        text = text.encode("ascii", "ignore").decode("ascii")
+        text = text.replace(" ", "_")
+        text = _SAFE_PATTERN.sub("_", text)
+        text = re.sub(r"_+", "_", text)
+        return text.strip("._-")
 
+    candidate = _clean(unidecode(base))
     if not candidate:
         raise ValueError("Filename cannot be normalized; specify a safer name")
 
