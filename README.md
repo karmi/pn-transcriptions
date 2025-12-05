@@ -60,3 +60,9 @@ To only validate the CSV slice for duplicate filenames without transcribing, run
 ```bash
 uv run python main.py check tmp/samples/samples.csv
 ```
+
+To export completed rows to a minimal CSV with download URLs:
+
+```bash
+uv run python main.py export tmp/samples/samples.csv --output tmp/export.csv
+```

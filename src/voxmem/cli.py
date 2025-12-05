@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import datetime as dt
 import logging
 import os
@@ -199,6 +200,66 @@ def check(
         f"[green]Checked {len(selected)} row(s); no duplicates found.[/green]"
     )
     raise typer.Exit(code=0)
+
+
+@app.command()
+def export(
+    csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, writable=True),
+    output: Path = typer.Option(
+        Path("export.csv"),
+        "--output",
+        "-o",
+        file_okay=True,
+        dir_okay=False,
+        help="Path to the export CSV (defaults to export.csv)",
+    ),
+    offset: int = typer.Option(
+        0, "--offset", min=0, help="Start processing from this row (0-based)"
+    ),
+    limit: Optional[int] = typer.Option(
+        None,
+        "--limit",
+        min=1,
+        help="Maximum number of rows to process (defaults to the rest of the file)",
+    ),
+):
+    """Export completed transcriptions to a CSV with download URLs."""
+    load_dotenv()
+    store = CsvStore(csv_path)
+    selected = store.slice(offset=offset, limit=limit)
+    if not selected:
+        console.print("[yellow]No rows matched the requested offset/limit.[/yellow]")
+        raise typer.Exit(code=0)
+
+    completed = [row for row in selected if row.is_completed()]
+    if not completed:
+        console.print("[yellow]No completed transcriptions found in selection.[/yellow]")
+        raise typer.Exit(code=0)
+
+    output.parent.mkdir(parents=True, exist_ok=True)
+    with output.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(
+            fh,
+            fieldnames=["file_id", "media_id", "filename", "transcription_url"],
+        )
+        writer.writeheader()
+        for row in completed:
+            stem = Path(row.filename).stem or row.filename
+            writer.writerow(
+                {
+                    "file_id": row.data.get("file_id", "").strip(),
+                    "media_id": row.data.get("media_id", "").strip(),
+                    "filename": row.filename,
+                    "transcription_url": (
+                        f"https://files.pn.karmi.dev/{stem}/{row.transcription_id}.srt"
+                    ),
+                }
+            )
+
+    console.print(
+        f"[green]Exported {len(completed)} row(s) to {output} "
+        f"(selected {len(selected)} total).[/green]"
+    )
 
 
 @app.command()

@@ -22,20 +22,24 @@ class CsvRow:
 
     @property
     def filename(self) -> str:
-        return self.data.get("filename", "").strip()
+        value = self.data.get("filename") or ""
+        return str(value).strip()
 
     @property
     def url(self) -> str:
-        return self.data.get("url", "").strip()
+        value = self.data.get("url") or ""
+        return str(value).strip()
 
     @property
     def transcription_id(self) -> str | None:
-        value = self.data.get("transcription_id", "").strip()
+        value = self.data.get("transcription_id") or ""
+        value = str(value).strip()
         return value or None
 
     @property
     def status(self) -> str | None:
-        value = self.data.get("status", "").strip()
+        value = self.data.get("status") or ""
+        value = str(value).strip()
         return value or None
 
     def is_completed(self) -> bool:
@@ -75,7 +79,8 @@ class CsvStore:
 
     def _ensure_defaults(self, row: dict[str, str]) -> dict[str, str]:
         for col in DEFAULT_COLUMNS:
-            row.setdefault(col, "")
+            value = row.get(col)
+            row[col] = "" if value is None else value
         return row
 
     def slice(self, offset: int, limit: int | None) -> list[CsvRow]:
