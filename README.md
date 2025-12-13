@@ -47,7 +47,7 @@ Run the Typer-based CLI with `uv` (recommended):
 ```bash
 uv run python main.py transcribe tmp/samples/samples.csv \
   --output output/runs/batch-001 \
-  --workers 8 \
+  --workers 25 \
   --offset 0 \
   --limit 250 \
   --logfile output/runs/batch-001/transcriptions.log
@@ -65,4 +65,10 @@ To export completed rows to a minimal CSV with download URLs:
 
 ```bash
 uv run python main.py export tmp/samples/samples.csv --output tmp/export.csv
+```
+
+To report total size and estimated duration for URLs in the CSV file:
+
+```bash
+uv run python main.py stats tmp/samples/samples.csv --workers 50
 ```

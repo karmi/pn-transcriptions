@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
+import http.client
 import logging
 import os
 import sys
@@ -10,12 +11,15 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
+from collections import Counter
 from pathlib import Path
 from typing import Any, Mapping, Optional
+from urllib.parse import urljoin, urlsplit
 
+import humanize
+import requests
 import typer
 from dotenv import load_dotenv
-import humanize
 from rich.console import Console
 from rich.progress import (
     BarColumn,
@@ -233,7 +237,9 @@ def export(
 
     completed = [row for row in selected if row.is_completed()]
     if not completed:
-        console.print("[yellow]No completed transcriptions found in selection.[/yellow]")
+        console.print(
+            "[yellow]No completed transcriptions found in selection.[/yellow]"
+        )
         raise typer.Exit(code=0)
 
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -260,6 +266,123 @@ def export(
         f"[green]Exported {len(completed)} row(s) to {output} "
         f"(selected {len(selected)} total).[/green]"
     )
+
+
+def _head_content_length(url: str, *, timeout: float, max_redirects: int) -> int | None:
+    with requests.Session() as session:
+        session.max_redirects = max_redirects
+        resp = session.head(
+            url,
+            timeout=timeout,
+            allow_redirects=True,
+            headers={"User-Agent": "TranscriptionsStats/1.0"},
+        )
+        resp.raise_for_status()
+        length = resp.headers.get("Content-Length")
+        return int(length) if length and length.isdigit() else None
+
+
+@app.command()
+def stats(
+    csv_path: Path = typer.Argument(..., exists=True, dir_okay=False, writable=True),
+    workers: int = typer.Option(
+        10, "--workers", "-j", min=1, help="Number of worker threads"
+    ),
+    offset: int = typer.Option(
+        0, "--offset", min=0, help="Start processing from this row (0-based)"
+    ),
+    limit: Optional[int] = typer.Option(
+        None, "--limit", min=1, help="Maximum number of rows to process"
+    ),
+    timeout: float = typer.Option(
+        10.0, "--timeout", help="Per-request timeout in seconds"
+    ),
+    max_redirects: int = typer.Option(
+        5, "--max-redirects", help="Maximum redirects to follow"
+    ),
+    bitrate: int = typer.Option(
+        128_000,
+        "--bitrate",
+        help="Assumed bitrate in bits per second to estimate duration from bytes (default 128000 bps)",
+    ),
+    logfile: Path = typer.Option(
+        Path("stats.log"),
+        "--logfile",
+        file_okay=True,
+        dir_okay=False,
+        help="File to write error details to (default: stats.log)",
+    ),
+) -> None:
+    """Fetch HEAD Content-Length for URLs and report aggregate size and estimated duration."""
+    load_dotenv()
+    store = CsvStore(csv_path)
+    selected = store.slice(offset=offset, limit=limit)
+    targets = [(row.index, row.filename, row.url) for row in selected if row.url]
+
+    if not targets:
+        console.print("[yellow]No URLs to process in the selected slice.[/yellow]")
+        raise typer.Exit(code=0)
+
+    total = len(targets)
+    console.print(f"Processing {total} URL(s) with {workers} worker(s)...")
+
+    total_bytes = 0
+    successes = failures = missing = 0
+    error_messages: list[tuple[int, str, str, int | None]] = []
+    status_counts: Counter[int] = Counter()
+
+    def task(
+        item: tuple[int, str, str],
+    ) -> tuple[int, str, int | None, str | None, int | None]:
+        idx, filename, url = item
+        try:
+            length = _head_content_length(
+                url, timeout=timeout, max_redirects=max_redirects
+            )
+            return idx, filename, length, None, None
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            return idx, filename, None, str(exc), status
+        except Exception as exc:
+            return idx, filename, None, str(exc), None
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        for idx, fname, length, err, status in executor.map(task, targets):
+            if err is not None:
+                failures += 1
+                error_messages.append((idx, fname, err, status))
+                if status is not None:
+                    status_counts[status] += 1
+            elif length is None:
+                missing += 1
+            else:
+                successes += 1
+                total_bytes += length
+
+    total_size = humanize.naturalsize(total_bytes, binary=True)
+    estimated_seconds = (total_bytes * 8 / bitrate) if bitrate > 0 else None
+    if estimated_seconds is not None:
+        hours = estimated_seconds / 3600
+        estimated_duration = f"{humanize.intcomma(int(hours))} hours"
+    else:
+        estimated_duration = "n/a"
+
+    console.print(
+        "[bold]Stats:[/bold] "
+        f"urls={total} ok={successes} missing_length={missing} errors={failures} "
+        f"size={total_size} est_duration={estimated_duration}"
+    )
+    if failures and error_messages:
+        logfile.parent.mkdir(parents=True, exist_ok=True)
+        with logfile.open("w", encoding="utf-8") as fh:
+            for idx, fname, msg, status in error_messages:
+                fh.write(f"row={idx} file={fname} status={status or '?'} error={msg}\n")
+        if status_counts:
+            summary = ", ".join(
+                f"[yellow not bold]{code}[/]={count}"
+                for code, count in sorted(status_counts.items())
+            )
+            console.print(f"[bold]Error:[/bold] {summary}")
 
 
 @app.command()
@@ -385,9 +508,7 @@ def transcribe(
                     filename = row.filename or f"row #{row.index}"
                     exc_name = type(exc).__name__
                     detail = _exc_summary(exc)
-                    console.print(
-                        f"{state} {filename} [dim]{exc_name}: {detail}[/dim]"
-                    )
+                    console.print(f"{state} {filename} [dim]{exc_name}: {detail}[/dim]")
                     errors.append(f"{filename}: {exc}")
                     logger.error(
                         "failed filename=%s error=%s location=%s detail=%s",
@@ -408,9 +529,7 @@ def transcribe(
                     f"• {format_duration(result.audio_duration)} in "
                     f"{format_duration(result.duration)}"
                 )
-                console.print(
-                    f"{state} {result.filename} [dim]{detail}[/dim]"
-                )
+                console.print(f"{state} {result.filename} [dim]{detail}[/dim]")
 
     total_duration = time.monotonic() - start_time
     summary = (
