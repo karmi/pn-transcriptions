@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import datetime as dt
-import http.client
 import logging
 import os
 import sys
@@ -12,9 +11,9 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from collections import Counter
+from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Optional
-from urllib.parse import urljoin, urlsplit
 
 import humanize
 import requests
@@ -33,11 +32,18 @@ from rich.progress import (
 
 from .csv_store import CsvRow, CsvStore
 from .storage import StorageResult, TranscriptStorage
-from .transcription import AssemblyAIClient, AssemblyAIError, RateLimitEvent
+from .transcription import RateLimitEvent, TranscriptionError, Transcriber
+from .transcribers.assemblyai import AssemblyAITranscriber
+from .transcribers.elevenlabs import ElevenLabsTranscriber
 
 
 console = Console()
 app = typer.Typer(add_completion=False, rich_markup_mode="rich")
+
+
+class TranscriptionProvider(str, Enum):
+    elevenlabs = "elevenlabs"
+    assemblyai = "assemblyai"
 
 
 @dataclass(slots=True)
@@ -93,11 +99,16 @@ def build_progress(total: int, skipped: int) -> Progress:
     )
 
 
-def require_api_key() -> str:
-    api_key = os.environ.get("ASSEMBLYAI_API_KEY", "").strip()
+def require_api_key(provider: TranscriptionProvider) -> str:
+    if provider == TranscriptionProvider.elevenlabs:
+        env_var = "ELEVENLABS_API_KEY"
+    else:
+        env_var = "ASSEMBLYAI_API_KEY"
+
+    api_key = os.environ.get(env_var, "").strip()
     if not api_key:
         raise typer.BadParameter(
-            "ASSEMBLYAI_API_KEY is not set; add it to the environment or .env"
+            f"{env_var} is not set; add it to the environment or .env"
         )
     return api_key
 
@@ -124,9 +135,9 @@ def process_row(
 ) -> WorkerResult:
     filename = row.filename
     if not filename:
-        raise AssemblyAIError("Row is missing filename")
+        raise TranscriptionError("Row is missing filename")
     if not row.url:
-        raise AssemblyAIError(f"{filename}: missing URL")
+        raise TranscriptionError(f"{filename}: missing URL")
 
     client = client_factory()
     start = time.monotonic()
@@ -137,8 +148,6 @@ def process_row(
         filename,
         transcription_id,
         result.payload,
-        vtt=result.vtt,
-        srt=result.srt,
     )
     audio_duration = _extract_audio_duration(result.payload)
     duration = time.monotonic() - start
@@ -164,10 +173,27 @@ def _extract_audio_duration(payload: Mapping[str, Any]) -> float | None:
     value = payload.get("audio_duration") if isinstance(payload, dict) else None
     try:
         if value is None:
-            return None
+            raise ValueError("no audio_duration")
         return float(value)
     except (TypeError, ValueError):
-        return None
+        words: list[Mapping[str, Any]] = []
+        if isinstance(payload, dict):
+            if "transcripts" in payload:
+                for transcript in payload.get("transcripts") or []:
+                    words.extend(transcript.get("words") or [])
+            else:
+                words.extend(payload.get("words") or [])
+        ends = []
+        for word in words:
+            try:
+                end = float(word.get("end"))
+            except (TypeError, ValueError):
+                continue
+            ends.append(end)
+        if not ends:
+            return None
+        max_end = max(ends)
+        return max_end / 1000.0 if max_end > 10000 else max_end
 
 
 @app.command()
@@ -227,7 +253,7 @@ def export(
         help="Maximum number of rows to process (defaults to the rest of the file)",
     ),
 ):
-    """Export completed transcriptions to a CSV with download URLs."""
+    """Export completed transcriptions to a CSV with JSON payload URLs."""
     load_dotenv()
     store = CsvStore(csv_path)
     selected = store.slice(offset=offset, limit=limit)
@@ -257,7 +283,7 @@ def export(
                     "media_id": row.data.get("media_id", "").strip(),
                     "filename": row.filename,
                     "transcription_url": (
-                        f"https://files.pn.karmi.dev/{stem}/{row.transcription_id}.srt"
+                        f"https://files.pn.karmi.dev/{stem}/{row.transcription_id}.json"
                     ),
                 }
             )
@@ -416,7 +442,12 @@ def transcribe(
     poll_interval: float = typer.Option(
         2.0,
         "--poll-interval",
-        help="Seconds to wait between polling AssemblyAI",
+        help="Seconds to wait between polling providers",
+    ),
+    provider: TranscriptionProvider = typer.Option(
+        TranscriptionProvider.elevenlabs,
+        "--provider",
+        help="Transcription provider to use (default: elevenlabs)",
     ),
     logfile: Optional[str] = typer.Option(
         None,
@@ -424,13 +455,13 @@ def transcribe(
         help="Path to log file (use '--' for stdout, default writes to OUTPUT/transcriptions.log)",
     ),
 ):
-    """Transcribe audio files listed in CSV via AssemblyAI."""
+    """Transcribe audio files listed in CSV via the selected provider."""
 
     load_dotenv()
     output.mkdir(parents=True, exist_ok=True)
     logger = configure_logging(logfile, output)
 
-    api_key = require_api_key()
+    api_key = require_api_key(provider)
     store = CsvStore(csv_path)
     selected = store.slice(offset=offset, limit=limit)
     if not selected:
@@ -451,23 +482,34 @@ def transcribe(
     rate_limit_callback = lambda event: handle_rate_limit(event, logger)
     thread_local: threading.local = threading.local()
 
-    def client_factory() -> AssemblyAIClient:
+    def client_factory() -> Transcriber:
         client = getattr(thread_local, "client", None)
         if client is None:
-            client = AssemblyAIClient(
-                api_key=api_key,
-                poll_interval=poll_interval,
-                timeout=float(timeout),
-                on_rate_limit=rate_limit_callback,
-            )
+            if provider == TranscriptionProvider.elevenlabs:
+                client = ElevenLabsTranscriber(
+                    api_key=api_key,
+                    request_timeout=float(timeout),
+                    timeout=float(timeout),
+                    poll_interval=poll_interval,
+                    on_rate_limit=rate_limit_callback,
+                )
+            else:
+                client = AssemblyAITranscriber(
+                    api_key=api_key,
+                    poll_interval=poll_interval,
+                    timeout=float(timeout),
+                    on_rate_limit=rate_limit_callback,
+                )
             thread_local.client = client
         return client
 
     console.print(
-        f"Processing {len(pending)} row(s) (skipping {skipped}) from {csv_path}"
+        f"Processing {len(pending)} row(s) (skipping {skipped}) from {csv_path} "
+        f"using {provider.value}"
     )
     logger.info(
-        "start csv=%s rows=%d skipped=%d workers=%d offset=%d limit=%s",
+        "start provider=%s csv=%s rows=%d skipped=%d workers=%d offset=%d limit=%s",
+        provider.value,
         csv_path,
         len(pending),
         skipped,
@@ -487,7 +529,6 @@ def transcribe(
 
     completed = 0
     failed = 0
-    errors: list[str] = []
 
     start_time = time.monotonic()
 
@@ -509,7 +550,6 @@ def transcribe(
                     exc_name = type(exc).__name__
                     detail = _exc_summary(exc)
                     console.print(f"{state} {filename} [dim]{exc_name}: {detail}[/dim]")
-                    errors.append(f"{filename}: {exc}")
                     logger.error(
                         "failed filename=%s error=%s location=%s detail=%s",
                         filename,

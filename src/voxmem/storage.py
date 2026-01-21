@@ -14,8 +14,6 @@ from .util.path import normalize_to_dirname
 class StorageResult:
     folder: Path
     json_path: Path
-    vtt_path: Path | None
-    srt_path: Path | None
 
 
 class TranscriptStorage:
@@ -29,17 +27,10 @@ class TranscriptStorage:
         filename: str,
         transcription_id: str,
         payload: Mapping[str, Any],
-        *,
-        vtt: str | None = None,
-        srt: str | None = None,
     ) -> StorageResult:
         folder = self._ensure_folder(filename)
         json_path = self._write_json(folder / f"{transcription_id}.json", payload)
-        vtt_path = self._write_text(folder / f"{transcription_id}.vtt", vtt)
-        srt_path = self._write_text(folder / f"{transcription_id}.srt", srt)
-        return StorageResult(
-            folder=folder, json_path=json_path, vtt_path=vtt_path, srt_path=srt_path
-        )
+        return StorageResult(folder=folder, json_path=json_path)
 
     def _ensure_folder(self, filename: str) -> Path:
         safe = normalize_to_dirname(filename)
@@ -49,12 +40,6 @@ class TranscriptStorage:
 
     def _write_json(self, target: Path, payload: Mapping[str, Any]) -> Path:
         self._atomic_write(target, json.dumps(payload, ensure_ascii=False, indent=2))
-        return target
-
-    def _write_text(self, target: Path, content: str | None) -> Path | None:
-        if content is None:
-            return None
-        self._atomic_write(target, content)
         return target
 
     def _atomic_write(self, target: Path, data: str) -> None:

@@ -66,4 +66,4 @@ def test_export_writes_completed_rows(tmp_path: Path) -> None:
     assert row["file_id"] == "1"
     assert row["media_id"] == "10"
     assert row["filename"] == "one.mp3"
-    assert row["transcription_url"] == "https://files.pn.karmi.dev/one/abc.srt"
+    assert row["transcription_url"] == "https://files.pn.karmi.dev/one/abc.json"
