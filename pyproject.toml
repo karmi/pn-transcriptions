@@ -17,6 +17,7 @@ dependencies = [
     "rapidfuzz>=3.14.3",
     "google-genai>=1.58.0",
     "pydantic>=2.12.4",
+    "boto3>=1.42.39",
 ]
 
 [build-system]
