@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import csv
-import datetime as dt
 import logging
 import os
 import sys
@@ -35,6 +34,7 @@ from .storage import StorageResult, TranscriptStorage
 from .transcription import RateLimitEvent, TranscriptionError, Transcriber
 from .transcribers.assemblyai import AssemblyAITranscriber
 from .transcribers.elevenlabs import ElevenLabsTranscriber
+from .util.url_signing import resolve_audio_url, resolve_head_url
 
 
 console = Console()
@@ -132,6 +132,7 @@ def process_row(
     client_factory,
     storage: TranscriptStorage,
     logger: logging.Logger,
+    thread_local: threading.local,
 ) -> WorkerResult:
     filename = row.filename
     if not filename:
@@ -139,9 +140,11 @@ def process_row(
     if not row.url:
         raise TranscriptionError(f"{filename}: missing URL")
 
+    url = resolve_audio_url(row.url, logger, thread_local)
+
     client = client_factory()
     start = time.monotonic()
-    result = client.transcribe(row.url)
+    result = client.transcribe(url)
     transcription_id = result.transcription_id
 
     storage_result = storage.save_bundle(
@@ -294,18 +297,52 @@ def export(
     )
 
 
-def _head_content_length(url: str, *, timeout: float, max_redirects: int) -> int | None:
-    with requests.Session() as session:
-        session.max_redirects = max_redirects
-        resp = session.head(
-            url,
-            timeout=timeout,
-            allow_redirects=True,
-            headers={"User-Agent": "TranscriptionsStats/1.0"},
-        )
-        resp.raise_for_status()
-        length = resp.headers.get("Content-Length")
-        return int(length) if length and length.isdigit() else None
+def _head_content_length(
+    session: requests.Session,
+    url: str,
+    *,
+    timeout: float,
+    max_redirects: int,
+) -> int | None:
+    session.max_redirects = max_redirects
+    resp = session.head(
+        url,
+        timeout=timeout,
+        allow_redirects=True,
+        headers={"User-Agent": "TranscriptionsStats/1.0"},
+    )
+    resp.raise_for_status()
+    length = resp.headers.get("Content-Length")
+    return int(length) if length and length.isdigit() else None
+
+
+def _head_with_retry(
+    session: requests.Session,
+    url: str,
+    *,
+    timeout: float,
+    max_redirects: int,
+    max_retries: int,
+) -> int | None:
+    for attempt in range(1, max_retries + 1):
+        try:
+            return _head_content_length(
+                session,
+                url,
+                timeout=timeout,
+                max_redirects=max_redirects,
+            )
+        except requests.HTTPError as exc:
+            status = exc.response.status_code if exc.response is not None else None
+            if status in {429, 500, 502, 503, 504} and attempt < max_retries:
+                time.sleep(min(10.0, 2 ** (attempt - 1)))
+                continue
+            raise
+        except requests.RequestException:
+            if attempt >= max_retries:
+                raise
+            time.sleep(min(10.0, 2 ** (attempt - 1)))
+    raise requests.RequestException("maximum retries exceeded")
 
 
 @app.command()
@@ -321,7 +358,7 @@ def stats(
         None, "--limit", min=1, help="Maximum number of rows to process"
     ),
     timeout: float = typer.Option(
-        10.0, "--timeout", help="Per-request timeout in seconds"
+        30.0, "--timeout", help="Per-request timeout in seconds"
     ),
     max_redirects: int = typer.Option(
         5, "--max-redirects", help="Maximum redirects to follow"
@@ -344,6 +381,9 @@ def stats(
     store = CsvStore(csv_path)
     selected = store.slice(offset=offset, limit=limit)
     targets = [(row.index, row.filename, row.url) for row in selected if row.url]
+    thread_local: threading.local = threading.local()
+    stats_logger = logging.getLogger("voxmem.stats")
+    max_retries = int(os.environ.get("STATS_MAX_RETRIES", "5") or "5")
 
     if not targets:
         console.print("[yellow]No URLs to process in the selected slice.[/yellow]")
@@ -361,9 +401,18 @@ def stats(
         item: tuple[int, str, str],
     ) -> tuple[int, str, int | None, str | None, int | None]:
         idx, filename, url = item
+        session = getattr(thread_local, "session", None)
+        if session is None:
+            session = requests.Session()
+            thread_local.session = session
         try:
-            length = _head_content_length(
-                url, timeout=timeout, max_redirects=max_redirects
+            signed_url = resolve_head_url(url, stats_logger, thread_local)
+            length = _head_with_retry(
+                session,
+                signed_url,
+                timeout=timeout,
+                max_redirects=max_redirects,
+                max_retries=max_retries,
             )
             return idx, filename, length, None, None
         except requests.HTTPError as exc:
@@ -535,8 +584,15 @@ def transcribe(
     with progress:
         with ThreadPoolExecutor(max_workers=workers) as executor:
             future_map = {
-                executor.submit(process_row, row, client_factory, storage, logger): row
-                for row in pending
+                    executor.submit(
+                        process_row,
+                        row,
+                        client_factory,
+                        storage,
+                        logger,
+                        thread_local,
+                    ): row
+                    for row in pending
             }
 
             for future in as_completed(future_map):
