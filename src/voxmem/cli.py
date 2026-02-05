@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import datetime as dt
 import logging
 import os
 import sys
@@ -528,7 +529,8 @@ def transcribe(
         raise typer.Exit(code=0)
 
     storage = TranscriptStorage(output)
-    rate_limit_callback = lambda event: handle_rate_limit(event, logger)
+    def rate_limit_callback(event: RateLimitEvent) -> None:
+        handle_rate_limit(event, logger)
     thread_local: threading.local = threading.local()
 
     def client_factory() -> Transcriber:
